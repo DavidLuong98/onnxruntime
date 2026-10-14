@@ -3,6 +3,7 @@
 
 #include "core/session/plugin_ep/ep_plugin_provider_interfaces.h"
 
+#include <algorithm>
 #include <gsl/gsl>
 #include <memory>
 #include <string>
@@ -17,6 +18,7 @@
 #include "core/common/inlined_containers.h"
 #include <limits>
 
+#include "core/graph/constants.h"
 #include "core/graph/ep_api_types.h"
 #include "core/graph/model_editor_api_types.h"
 #include "core/session/abi_devices.h"
@@ -335,6 +337,24 @@ PluginExecutionProvider::GetCapability(const onnxruntime::GraphViewer& graph_vie
                             << node_for_other_ep->OpType() << " node with name '"
                             << node_for_other_ep->Name() << "'.";
       continue;
+    }
+
+    // Plugin accounting cannot receive Level-1 estimates yet. Reject the whole
+    // group rather than use generic or profiled costs for an unproven GQA bound.
+    if (resource_accountant != nullptr && Type() == kCudaExecutionProvider) {
+      const auto unproven_gqa = std::find_if(
+          node_grouping.nodes.begin(), node_grouping.nodes.end(), [](const EpNode* ep_node) {
+            const Node& node = ep_node->GetInternalNode();
+            return node.GetExecutionProviderType().empty() &&
+                   node.OpType() == "GroupQueryAttention" && node.Domain() == kMSDomain;
+          });
+      if (unproven_gqa != node_grouping.nodes.end()) {
+        LOGS(logger, WARNING)
+            << Type() << " declining capacity-aware assignment for GroupQueryAttention node "
+            << (*unproven_gqa)->GetInternalNode().Name()
+            << " because the plugin accounting path has no proven route-aware workspace estimate.";
+        continue;
+      }
     }
 
     if (node_grouping.kind == OrtEpGraphSupportInfo::NodeGroupingKind::kSingleAssignedNode) {
@@ -930,9 +950,9 @@ void PluginExecutionProvider::RegisterStreamHandlers(IStreamCommandHandleRegistr
 
     registry.RegisterCreateStreamFn(
         device_type,
-        [mem_info, this](const OrtDevice& device) {
+        [this](const OrtDevice& device) {
           OrtSyncStreamImpl* stream = nullptr;
-          const OrtMemoryDevice* memory_device = static_cast<const OrtMemoryDevice*>(&mem_info->device);
+          const OrtMemoryDevice* memory_device = static_cast<const OrtMemoryDevice*>(&device);
 
           // prefer OrtEp function if available, otherwise fall back to using the OrtEpFactory implementation.
           OrtStatus* status = ort_ep_->CreateSyncStreamForDevice

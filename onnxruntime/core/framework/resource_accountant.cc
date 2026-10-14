@@ -569,10 +569,10 @@ Status CreateAccountants(
   WorkspaceEstimatorConfig estimator_config{
       config_options.GetConfigEntry(kOrtSessionOptionsCudaFpAIntBGemm),
       config_options.GetConfigEntry(kOrtSessionOptionsCudaFpAIntBProfileM)};
-  ORT_RETURN_IF_ERROR(ParseCudaGqaWorkspaceMaxTotalSequenceLength(
-      config_options, estimator_config.cuda_gqa_workspace_max_total_sequence_length));
   estimator_config.kernel_dispatch_policy =
       config_options.GetConfigEntry(kOrtSessionOptionsKernelDispatchPolicy);
+  ORT_RETURN_IF_ERROR(ParseCudaGqaWorkspaceMaxTotalSequenceLength(
+      config_options, estimator_config.cuda_gqa_workspace_max_total_sequence_length));
 
   std::optional<ResourceAccountantMap> result;
   // Check if CUDA partitioning settings are provided
