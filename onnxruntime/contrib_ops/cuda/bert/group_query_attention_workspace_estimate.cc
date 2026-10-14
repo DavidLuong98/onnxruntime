@@ -200,10 +200,14 @@ std::optional<GQAWorkspaceBounds> BuildBounds(
   // WorkspaceInputShape exposes the total_sequence_length scalar's shape, not
   // its value. For a non-windowed cache that value can exceed past dim 2 and
   // directly scales backend workspace, so a sound bound needs the KV-length
-  // envelope config.max_total_sequence_length. Without it, decline as before.
-  // A full past-tensor copy when only one past/present pair aliases is charged
-  // separately via bounds.account_partial_alias_preservation below. Windowed
-  // execution is bounded by the cache shape and requires both pairs to alias.
+  // envelope config.max_total_sequence_length (session option
+  // ep.cuda.gqa_workspace_max_total_sequence_length). Without it there is no
+  // sound non-windowed bound, so decline -- this preserves the prior behavior
+  // whenever the envelope is unset. Windowed execution is bounded by the cache
+  // shape. The other non-windowed concern -- a full past-tensor copy when only
+  // one past/present pair aliases -- is charged separately as preservation
+  // scratch via bounds.account_partial_alias_preservation below; windowed
+  // execution requires both pairs to alias, so it never incurs that copy.
   const bool windowed = config.sliding_window_cache;
   if (!windowed && config.max_total_sequence_length <= 0) return std::nullopt;
 
@@ -329,10 +333,10 @@ std::optional<GQAWorkspaceBounds> BuildBounds(
   const bool quantized_xqa = k_quantized && config.kv_cache_bit_width == 8;
   const int64_t group_size = config.num_heads / config.kv_num_heads;
   const bool xqa_head_reachable =
-      (head_bound >= 64) &&
-      ((head_bound >= 64 && IsSupportedGQAXqaHeadSize(64)) ||
-       (head_bound >= 128 && IsSupportedGQAXqaHeadSize(128)) ||
-       (head_bound >= 256 && IsSupportedGQAXqaHeadSize(256)));
+      (head_bound >= 64 && IsSupportedGQAXqaGeometry(64, group_size, k_quantized)) ||
+      (head_bound >= 128 && IsSupportedGQAXqaGeometry(128, group_size, k_quantized)) ||
+      (head_bound >= 256 && IsSupportedGQAXqaGeometry(256, group_size, k_quantized)) ||
+      (head_bound >= 512 && IsSupportedGQAXqaGeometry(512, group_size, k_quantized));
   const bool fp8_cache = k_quantized && config.cache_is_fp8;
   const bool xqa_reachable =
       config.enable_xqa && config.causal == 1 && !has_bias &&
@@ -340,7 +344,6 @@ std::optional<GQAWorkspaceBounds> BuildBounds(
       smooth_supported_by_xqa && (!bounds.use_qk_norm || !k_quantized) &&
       (!k_quantized || config.kv_cache_bit_width == 8) &&
       xqa_head_reachable &&
-      IsSupportedGQAXqaGroupSize(group_size, k_quantized) &&
       (!fp8_cache || device_prop.major >= 9 ||
        (device_prop.major == 8 && device_prop.minor == 9));
   if (xqa_reachable) {

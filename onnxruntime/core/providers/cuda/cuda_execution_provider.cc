@@ -3637,6 +3637,7 @@ CUDAExecutionProvider::GetCapability(const onnxruntime::GraphViewer& graph,
             input_defs.size() > 11 && input_defs[11] != nullptr &&
             input_defs[11]->Exists() &&
             graph.IsConstantInitializer(input_defs[11]->Name(), true);
+        // The factory validates the caller-declared envelope once.
         const auto& estimator_config = resource_accountant->GetWorkspaceEstimatorConfig();
         const auto gqa_workspace_max_total_sequence_length =
             estimator_config.cuda_gqa_workspace_max_total_sequence_length;
@@ -3657,6 +3658,13 @@ CUDAExecutionProvider::GetCapability(const onnxruntime::GraphViewer& graph,
           LOGS(logger, VERBOSE) << "Level-1 memory estimate for " << node->Name()
                                 << ": runtime workspace="
                                 << ws->total_workspace_bytes << " bytes";
+        } else {
+          // The generic safety margin is an ad-hoc fallback, not a proven GQA
+          // workspace bound. Capacity-aware placement therefore fails closed.
+          LOGS(logger, WARNING)
+              << "CUDA_EP declining capacity-aware assignment for GroupQueryAttention node "
+              << node->Name() << " because no proven route-aware workspace estimate is available.";
+          continue;
         }
       }
 #endif
